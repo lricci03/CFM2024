@@ -8,3 +8,5 @@ X_new_processed.csv
 X_new_test_processed.csv
 CFM2024/*.csv
 CFM2024-new/*.parquet
+CFM2024-old/*.csv
+CFM2025-new/*.csv
