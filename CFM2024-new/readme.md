@@ -14,6 +14,28 @@ We combine different approaches:
 * *n*-variate series can also be predicted with (stacks of) convolutional layers, e.g. with a WaveNet structure.
 * Using DNNs **and** RNNs: for each observation, the 100 ticks can be combined in *engineered features*, such as mid price, median price, ratio of venues, etc. 
 We build a model where the instances are composed by sequential features *and* engineered features: the sequential input goes through a RNN module, and the output is combined with the engineered input through a (stack of) fully connected layer(s).
+* Using Inception Modules (CNNs)
+* Using Inception Modules and Recurrent modules
+
+## Data preprocessing
+
+The dataset contains the following features: 
+* 'obs_id', 'venue', 'order_id', 'action', 'side', 'price', 'bid', 'ask', 'bid_size', 'ask_size', 'trade', 'flux'
+  
+`order_id` are too many for one-hot encoding and most importantly it is preserved across observations.
+
+We extract two informations out of it:
+- order_seen_before
+- order_previous_count
+
+Since we want to create these features as well for the test set later on, we define a function that does it: `add_order_features`.
+
+num_attribs:
+   * 'price', 'bid', 'ask', 'bid_size', 'ask_size', 'flux', 'trade', 'order_seen_before', 'order_previous_count'
+cat_attribs:
+   * 'venue', 'action', 'side'
+
+**Note**: we normalize the numerical attributes only for the Inception Modules. Not normalizing gives a model that predicts as well as randomly (4%).
 
 ## RNNs
 ### Input
@@ -21,11 +43,15 @@ Each instance is a multivariate series. The series consists of 100 sequential or
 
 obs_id is constant thorugh the series. 
 
-We keep all the numerical features: price, bid, ask, bid_size, ask_size, flux (6).
+We transform order_id into:
+- order_seen_before
+- order_previous_count
 
-We keep and one-hot encode only the following categorial features: action, venue (3 + 5)
+We keep all the numerical features: price, bid, ask, bid_size, ask_size, flux, trade (bool), order_seen_before (bool), order_previous_count (9).
 
-In total we have 14 features. So the input data has shape [160800, 100, 14].
+We keep and one-hot encode the categorial features: action, venue, side (3 + 6 + 2).
+
+In total we have 20 features. So the input data has shape [160800, 100, 20].
 
 Train set: 80% 
 Validation set: 20%
@@ -133,4 +159,78 @@ X_eng is scaled.
 ### Model
 X_seq goes through a nn.GRU layer with hidden size 128.
 
-The output is combined with X_eng and passed to a nn.linear layer (input_size = 30+14) which outputs the 24 classification logits. 
+The output is combined with X_eng and passed to a nn.linear layer (input_size = 30+14) which outputs the 24 classification logits.
+
+## Improvements and variations
+
+### Input normalization
+Normalization of the sequential data (numerical only) doesn't give a better performance for the RNN's models. It is necessary for CNNs modules. 
+
+We tried both to normalize all the numerical data, and only the bid_size, ask_size, flux.
+The latter gives better results, but not as good as without normalization.
+
+### Deep GRU model
+Gru model with `n_layers=2`. 
+
+We reach accuracy of 61% in 60 epochs. This is the best model we found overall.
+
+### Deep GRU joint model
+Implementing deep GRU (2 layers) in the joint model.
+It performs better than the joint model, but not better than Deep gru on the sequential only inputs.
+
+### Deep GRU joint with deep top layer
+
+This is `DeepJoint2GRUModel` in *joint-model.ipynb*.
+
+Instead of a single linear layer to combine the engineered features with the output of the 2-GRU-stack,
+we stack two linear layers (with ReLU).
+
+We reach only 27% accuracy in 50 epochs.
+
+### Inception Model
+
+This is `InceptionModel` in *cm2024.ipynb*.
+
+It consists of two inception modules followed by a two dense layers that do the classification.
+
+The inception modules consists of four **parallel** convolutional layers, of different kernel sizes and dimensions. Three of these are a pair of convolutional layers. The pair acts like a single powerful convolutional layer capable of capturing more complex patterns. The different kernel sizes allow them to capture patterns at different scales.
+
+Accuracy of 47% in 50 epochs. 
+
+### Inception Model 2
+
+This is `InceptionModel2` in *cm2024.ipynb*.
+
+It is the same as InceptionModel except that we
+* added a pooling layer between the inception and classification layers. Thus we reduce the 'tick' dimension from 25 (after the two inception modules) to 1. We lose **where** in the sequence the pattern occurred. Only retain something like "how strongly this feature occurred overall."
+* reduced the classification layer to a single layer (we do directly 128 -> output_dim instead of 128 -> 64 -> output dim).
+
+Accuracy of 65% in 120 epochs.
+
+### Inception Model with GRU
+
+Inception module stacked with GRU module (2 layers and hidden size = 64).
+After two inception modules the temporal dimension of the GRU layer is reduced to 25 as opposed to 100 in the "GRU-only" models. 
+
+Accuracy of 62% in 50 epochs. We reach 63% in 60 epochs and then it starts to overfit. 
+
+### Parallel Inception and GRU
+
+Since both the inception model and the 2-layer gru model reach good accuracy separately,
+instead of stacking them we train them parallel and then concatenate the outputs and make predictions
+with a fully connected layer. 
+
+This is the `ParallelInceptionGRUModel()`.
+
+We run out of running time to finish training.
+
+Accuracy of 40% after 10 epochs (better than both inception and gru separate, worst than them stacked). 
+
+## Final model and Submission
+We choose as final model the Inception Model with GRU. 
+The final training and submission are in the file `create_submission.ipynb`.
+
+* Upload training data and preprocess. Numerical features are scaled because we are using inception modules.
+* Training on the full training set for 60 epochs.
+* Test set is preprocessed and scaled with the mean and std dev of the full training set.
+* The submission is the file `submission_4.csv`. We reach **accuracy of 41\%**.
